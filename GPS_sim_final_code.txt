@@ -1,0 +1,132 @@
+% -----------STEP 1------------
+
+% 1-1
+
+% Reading the YUMA almanac from disk
+localYumafile = "C:\Users\ilsan\Desktop\IPSA\AERO3\Aerospace project\almanac_yuma2.txt";
+yumaText = fileread(localYumafile);
+
+% Checking if there is HTML
+if contains(lower(yumaText),'<html')
+   disp("The file is not a raw YUMA")
+end
+
+% Splitting by satellite
+blocks = regexp(lower(yumaText),'\\******** week 342 almanac for prn-[0-3][0-9] ********','split'); % There is an offset (?) due to the presence of an empty space in the beginning of the text, so the first block is the 2nd Column 
+
+for i = 1:32
+
+    block = strrep(blocks{i+1},' ','');
+
+
+    val1 = regexp(block,'id:\s*([-\d\.eE\+]+)','tokens');
+    val2 = regexp(block,'health:\s*([-\d\.eE\+]+)','tokens');
+    val3 = regexp(block,'eccentricity:\s*([-\d\.eE\+]+)','tokens');
+    val4 = regexp(block,'timeofapplicability\(s\):\s*([-\d\.eE\+]+)','tokens');
+    val5 = regexp(block,'orbitalinclination\(rad\):\s*([-\d\.eE\+]+)','tokens');
+    val6 = regexp(block,'rateofrightascen\(r/s\):\s*([-\d\.eE\+]+)','tokens');
+    val7 = regexp(block,'sqrt\(a\)\(m1/2\):\s*([-\d\.eE\+]+)','tokens');
+    val8 = regexp(block,'rightascenatweek\(rad\):\s*([-\d\.eE\+]+)','tokens');
+    val9 = regexp(block,'argumentofperigee\(rad\):\s*([-\d\.eE\+]+)','tokens');
+    val10 = regexp(block,'meananom\(rad\):\s*([-\d\.eE\+]+)','tokens');
+    val11 = regexp(block,'af0\(s\):\s*([-\d\.eE\+]+)','tokens');
+    val12 = regexp(block,'af1\(s/s\):\s*([-\d\.eE\+]+)','tokens');
+    val13 = regexp(block,'week:\s*([-\d\.eE\+]+)','tokens');
+
+% Creating the structure
+
+    s(i).PRN = str2double(val1{1}{1});
+    s(i).Health = str2double(val2{1}{1});
+    s(i).Eccentricity = str2double(val3{1}{1}) ;
+    s(i).TimeOfApplicability = str2double(val4{1}{1});
+    s(i).OrbitalInclination = str2double(val5{1}{1});
+    s(i).RateOfRightAscend = str2double(val6{1}{1});
+    s(i).SQRT_A = str2double(val7{1}{1});
+    s(i).RightAscendAtWeek = str2double(val8{1}{1});
+    s(i).ArgumentOfPerigee = str2double(val9{1}{1});
+    s(i).MeanAnomaly = str2double(val10{1}{1});
+    s(i).Af0 = str2double(val11{1}{1});
+    s(i).Af1 = str2double(val12{1}{1});
+    s(i).Week = str2double(val13{1}{1});
+    
+end
+
+% 1-2
+
+% Converting UTC time into GPS week / seconds-of-week
+
+tUTC = datetime(2025,2,19,0,0,0,'Timezone','UTC');
+epoch = datetime(1980,1,6,0,0,0,'TimeZone','UTC');
+dt_UTC = seconds(tUTC - epoch) ;
+WN = floor(dt_UTC/604800);
+SOW = dt_UTC -WN*604800;
+
+% Computing values of tk
+
+tk = [];
+
+for i = 1:32
+    ToA = s.TimeOfApplicability ;
+    delta_t = SOW - ToA;
+    t =  mod(delta_t + 302400,604800) - 302400;
+    tk(end+1) = t;
+end
+
+% ------------STEP 2-------------
+
+% Compute n0 and values of Mk 
+
+mu =  3.986004418e14;       % gravitational constant  
+omegaE = 7.2921150e-5;      % angular speed of Earth's rotation
+
+rECEF = struct;
+
+for i = 1:32
+  e = s(i).Eccentricity;
+  A = s(i).SQRT_A^2;
+  n0 = sqrt(mu/A^3);
+  Mk = s(i).MeanAnomaly + n0*tk(i);
+
+% Newton method to find E
+
+  E_l = [];
+  E_l(1) = Mk;
+
+  f = E_l(1)-e*sin(E_l(1)) - Mk;
+  fp = 1 - e*cos(E_l(1));
+  E_l(2) = E_l(1) - f/fp ;
+
+  k = 2;
+  while abs(E_l(k-1)-E_l(k))>10e-12 
+    f = E_l(k)-e*sin(E_l(k)) - Mk;
+    fp = 1 - e*cos(E_l(k));
+    E_l(k+1) = E_l(k) - f/fp;
+    k = k+1;
+  end
+
+  E = E_l(end);
+
+  v = atan2(sqrt(1-e^2)*sin(E),cos(E)-e);
+  u = s(i).ArgumentOfPerigee + v;
+  r = A*(1-e*cos(E));
+  xp = r*cos(u);
+  yp = r*sin(u);
+
+  Omega = s(i).RightAscendAtWeek + (s(i).RateOfRightAscend - omegaE)*tk(i)-omegaE*s(i).TimeOfApplicability;
+  i0 = s(i).OrbitalInclination;
+
+  x = xp*cos(Omega) - yp*cos(i0)*sin(Omega);
+  y = xp*sin(Omega) - yp*cos(i0)*cos(Omega);
+  z = yp*sin(i0);
+
+  rECEF(i).XCoordinate = x;
+  rECEF(i).YCoordinate = y;
+  rECEF(i).ZCoordinate = z;
+
+end
+
+%-------------STEP 3-------------
+
+user_l = [deg2rad(48.8),deg2rad(2.59),deg2rad(49.5)];   % random input location 
+
+
